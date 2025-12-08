@@ -23,7 +23,7 @@ for line in sys.stdin:
     else:
         print("Error\n")
     pos %= 100
-    print(f"The dial is rotated by {line} to point at {pos}; {part2}")
+    #print(f"The dial is rotated by {line} to point at {pos}; {part2}")
     if pos == 0:
         count+=1
         

@@ -21,7 +21,7 @@ for r in ranges:
             base = 0
             for j in range(0, parts):
                 base += 10**((digs*j)//parts)
-            for i in range(lo1,hi1):
+            for i in range(((lo1+base-1)//base)*base,hi1,base):
                 if i % base == 0 and i not in seen:
                     seen.add(i)
                     sum += i
