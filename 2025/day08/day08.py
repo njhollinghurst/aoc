@@ -48,37 +48,27 @@ for k in range(3):
 
 print(product)
 
-# part 2 -- now add connections one at a time until a single circuit is formed
-# let's continue the above approach by considering new connections in batches of N
-# with hindsight, increasing N to 5000 is faster (but requires knowledge of the answer!)
-bestall = bestn
-biggest_group = 1
-while True:
-    bestn = [(999999999, -1, -1)] * n
-    for (i,b) in enumerate(boxes):
-        for j in range(i+1,len(boxes)):
-            c = boxes[j]
-            dist =  (b[1]-c[1])**2 + (b[2]-c[2])**2 + (b[3]-c[3])**2
-            if (dist, i, j) in bestall:
-                continue
-            if dist < bestn[n-1][0] and (i,j):
-                bestn[n-1] = (dist, i, j)
-                bestn.sort()
-    for k in range(n):
-        if bestn[k][0] >= 999999999:
-            break
-        bg0 = boxes[bestn[k][1]][0]
-        bg1 = boxes[bestn[k][2]][0]
-        bestall.append(bestn[k])
+# part 2 -- new faster approach: Enumerate *all* the possible pairs and sort them by distance!
+
+allpairs = []
+for i in range(len(boxes)):
+    boxes[i][0] = i # reset group labels to individual boxes again
+    b = boxes[i]
+    for j in range(i+1, len(boxes)):
+        c = boxes[j]
+        dist = (b[1]-c[1])**2 + (b[2]-c[2])**2 + (b[3]-c[3])**2
+        allpairs.append((dist, i, j))
+allpairs.sort()
+for p in allpairs:
+        bg0 = boxes[p[1]][0]
+        bg1 = boxes[p[2]][0]
         groupsize = 0
         for i in range(len(boxes)):
             if boxes[i][0] == bg1:
                 boxes[i][0] = bg0;
             if boxes[i][0] == bg0:
                 groupsize += 1
-        if groupsize > biggest_group:
-            biggest_group = groupsize
         if groupsize == len(boxes):
-            print(f"Done after {len(bestall)} {bestall[-1]}, Xproduct = {boxes[bestall[-1][1]][1] * boxes[bestall[-1][2]][1]}")
-            exit()
-    print(len(bestall), "connections, bigest group", biggest_group)
+            print(f"{boxes[p[1]][1] * boxes[p[2]][1]}")
+            break
+
