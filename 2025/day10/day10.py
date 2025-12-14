@@ -1,131 +1,158 @@
 #!/bin/python3
 
 import sys
-import numpy
-import copy
+import numpy as np
+
+################################################################
+# Try to attack the problem with linear algebra!
+#
+# For convenience, everything is transposed wrt Ax = b
+# instead we have: [answer] * [[matrix]] = [joltages].
+#
+# We might need a pseudo-inverse "A+", because there could
+# be either "too many" switches (multiple solutions), or
+# "too many" (not independent) joltages, or both. Note that
+# the least-squares solution might not be in non-negative
+# integers, and isn't necessarily the cheapest.
+#
+# Where there are multiple solutions, the matrix I - (A+ A)
+# is nonzero. We need to work out which switches can vary.
+#
+# Five possible outcomes:
+#
+# (a) There is no solution. Fail.
+#
+# (b) The unique or least-squares solution gives fractional
+#     or negative values, for switches that can't vary. Fail.
+#
+# (c) The least-squares solution gives fractional or negative
+#     values for switches that can vary, and non-negative
+#     integers elsewhere. An acceptable solution might exist.
+#     Return a partial solution with a bitmap of switch
+#     indices to search over.
+#
+# (d) The least-squares solution gives non-negative integers
+#     everywhere but has degrees of freedom in switch values.
+#     This is a solution but we don't know if it's optimal.
+#     Return an upper bound on cost, and a partial solution
+#     with a bitmap of switch indices to search over.
+#
+# (e) There is a unique solution, either because the matrix
+#     was square and invertible, or the pseudo-inverse
+#     solution had no degrees of freedom in switch values;
+#     and all switch values are non-negative integers.
+#     This is a confirmed success. Return the cost.
+################################################################
+
+def foo(matrix, joltages):
+    n = len(matrix)
+    unique = len(matrix[0]) == n and np.linalg.det(matrix) >= 0.5
+    if unique:
+        Ainv_T = np.linalg.inv(matrix)
+    else:
+        Ainv_T = np.linalg.pinv(matrix)
+    v = np.linalg.matmul(joltages, Ainv_T)
+    q = np.linalg.matmul(v, matrix)
+    for j in range(len(joltages)):
+        if abs(q[j] - joltages[j]) >= 0.03125:
+            return (999999,[],0) # no valid solution found
+    bitmap = 0
+    if not unique:
+        ImAinvA_T = np.eye(n) - np.linalg.matmul(matrix, Ainv_T)
+        for i in range(n):
+            if np.max(np.fabs(ImAinvA_T[i])) >= 1.0e-9:
+                bitmap |= (1 << i)
+    frac = False
+    for i in range(len(v)):
+        if v[i] < -0.001 or abs(v[i]-round(v[i])) > 0.001:
+            if (bitmap & (1<<i)) == 0:
+                return (999999,[],0) # only fractional solutions
+            frac = True
+        v[i] = round(v[i])
+    v = v.astype('int')
+    n = 999999 if frac else sum(v)
+    return (n,v,bitmap)
+
+def bar(matrix, joltages):
+    if len(joltages) == 0 or max(joltages) == 0:
+        return 0
+    if len(matrix) == 0:
+        return 999999
+
+    # Do the maths
+    (c,v,bitmap) = foo(matrix, joltages)
+    if bitmap == 0:
+        return c
+
+    extracost = 0
+    joltages1 = joltages.copy()
+    if bitmap + 1 < (1 << len(matrix)):
+        # Some switches now have known values. Prune them out.
+        matrix0 = []
+        for i in range(len(matrix)):
+            if bitmap & (1 << i):
+                matrix0.append(matrix[i].copy())
+            else:
+                extracost += v[i]
+                for j in range(len(joltages1)):
+                    joltages1[j] -= v[i] * matrix[i][j]
+                    if joltages1[j] < 0:
+                        return 999999
+        # Now remove any joltages that are already satisfied,
+        # along with switches that would try to change them.
+        if min(joltages1) == 0:
+            j = 0
+            while j < len(joltages1):
+                if joltages1[j] == 0:
+                    s = 0
+                    while s < len(matrix0):
+                        if matrix0[s][j] != 0:
+                            matrix0.pop(s)
+                        else:
+                            matrix0[s].pop(j)
+                            s += 1
+                    joltages1.pop(j)
+                else:
+                    j += 1
+        if len(joltages1) == 0 or max(joltages1) == 0:
+            return 0
+        if len(matrix0) == 0:
+            return 999999
+    else:
+        matrix0 = matrix
+
+    # Find a switch that affects the smallest joltage
+    swx = 0
+    limit = -1
+    for s in range(len(matrix0)):
+        s_limit = -1
+        for j in range(len(joltages1)):
+            if matrix0[s][j] != 0:
+                if s_limit < 0 or joltages1[j] < s_limit:
+                    s_limit = joltages1[j]
+        if limit < 0 or s_limit <= limit:
+            swx = s
+            limit = s_limit
+
+    # Recursively search over all permissible values
+    matrix1 = matrix0[:swx] + matrix0[swx+1:]
+    for i in range(0, limit+1):
+        c1 = i + bar(matrix1, joltages1)
+        if c1 < c:
+            c = c1
+        for j in range(len(joltages1)):
+            joltages1[j] -= matrix0[swx][j]
+
+    return c + extracost
+
+
+## MAIN CODE FOLLOWS
 
 total = 0
 total2 = 0
 count = 0
 
-################################################################
-# Try to attack the problem with linear algebra!
-#
-# Four possible outcomes (excluding zero cases):
-#
-# (a) The matrix is square, invertible and has a positive
-#     integer solution. This is a confirmed success.
-#
-# (b) The matrix is square, invertible and has a non-integer
-#     or negative solution. This is a confirmed failure.
-#
-# (c) The pseudo-inverse finds a positive integer solution.
-#     This minimizes the Euclidean metric, not necessarily
-#     the Manhattan metric. This is a provisional success
-#     (except in a few cases where it must be optimal).
-#
-# (c) The pseudo-inverse finds a non-integer or negative
-#     solution. An integer solution might still exist.
-#     This is a provisional failure.
-#
-# (d) The pseudo-inverse does not find a valid solution.
-#     This is a confirmed failure.
-################################################################
-
-def foo(matrix, joltages):
-    if len(joltages) == 0 or max(joltages) == 0:
-        return (True,0)
-    if len(matrix) == 0 or len(matrix[0]) == 0:
-        return (True,999999)
-    unique = False
-    try:
-        assert(numpy.linalg.det(matrix) >= 0.5)
-        M = numpy.linalg.inv(matrix)
-        unique = True
-    except:
-        M = numpy.linalg.pinv(matrix)
-    v = numpy.linalg.matmul(joltages, M)
-    q = numpy.linalg.matmul(v, matrix)
-    for j in range(len(joltages)):
-        if abs(q[j] - joltages[j]) >= 0.0625:
-            return (True,999999)
-    for i in range(len(v)):
-        if v[i] < -0.001 or abs(v[i]-round(v[i])) > 0.001:
-            return (unique,999999)
-        v[i] = round(v[i])
-    n = round(sum(v))
-    if n < 3 or max(v) == n:
-       unique = True
-    return (unique,n)
-
-ticks = 10
-memo = dict()  # not sure if this is helping tbh
-
-def bar(matrix, joltages):
-    global memo, ticks
-    if len(joltages) == 0 or max(joltages) == 0:
-        return 0
-    keystr = None
-    if len(matrix) < 8:
-        keystr = str(matrix) + str(joltages)
-        if keystr in memo:
-            return memo[keystr]
-    if len(matrix) >= ticks:
-        print('.', end='', flush=True)
-    if min(joltages) == 0:
-        # Joltages contains zeroes. This triggers a pruning step
-        # to remove any zero elements from joltages, remove any
-        # switches that would try to set it, and remove the zero
-        # element from all remaining switches!
-        matrix = copy.deepcopy(matrix)
-        joltages = joltages.copy()
-        i = 0
-        while i < len(joltages):
-            if joltages[i] < 0.01:
-                j = 0
-                while j < len(matrix):
-                    if matrix[j][i] != 0:
-                        matrix.pop(j)
-                        continue
-                    matrix[j].pop(i)
-                    j += 1
-                joltages.pop(i)
-                continue
-            i += 1
-    if len(matrix) == 0:
-        return 999999 if sum(joltages) > 0.01 else 0
-    (unique,c) = foo(matrix, joltages)
-    if unique:
-        if keystr is not None:
-            memo[keystr] = c
-        return c
-    matrix1 = matrix[1:]
-    joltages1 = joltages.copy()
-    limit = -1
-    for j in range(len(joltages)):
-        if matrix[0][j] != 0 and (limit == -1 or limit > joltages[j]):
-            limit = joltages[j]
-    seen_any_good = 0
-    seen_num_bad = 0
-    for i in range(limit+1):
-        for j in range(len(joltages)):
-            joltages1[j] = joltages[j] - i * matrix[0][j]
-        c1 = i + bar(matrix1, joltages1)
-        if c1 < 999999:
-            seen_any_good += 1
-            seen_num_bad = 0
-        else:
-            seen_num_bad += 1
-            if seen_num_bad >= 32 and seen_any_good * seen_num_bad >= 64:  # XXX risky/hacky heuristic for speed!
-                break
-        if c1 < c:
-            c = c1
-    if keystr is not None:
-            memo[keystr] = c
-    return c
-
 for line in sys.stdin:
-    # parse input
     count += 1
     print(f"=== Line {count} ===")
     line = line.strip().split()
@@ -161,45 +188,20 @@ for line in sys.stdin:
     total += bestcost
 
     # part 2
-    memo.clear()
     matrix=[]
-    floorcost = 0
-    for s in sorted(switches, key = lambda x : x.bit_count()): # not sure why but this sort order seems faster
+    for s in switches:
         sv = []
         z = 0
         for i in range(npattern):
             sv.append(1 if (s & (1 << i)) else 0)
         matrix.append(sv)
-
-    target = 0
     joltages = []
     for (i,j) in enumerate(line[-1].strip('{}').split(',')):
         joltages.append(int(j))
 
-    i = 0
-    while i < len(matrix):
-        unique = matrix[i].copy()
-        for j in range(len(matrix)):
-            if j != i:
-                for k in range(len(joltages)):
-                    unique[k] *= 1 - matrix[j][k]
-        if max(unique) > 0:
-            ix = numpy.argmax(unique)
-            num = joltages[ix]
-            for j in range(len(joltages)):
-                joltages[j] -= num * matrix[i][j]
-                assert(joltages[j] >= 0)
-            floorcost += num
-            print(f"Fix switch {matrix[i]} which solely covers dial {ix} with {num}")
-            matrix.pop(i)
-            continue
-        i += 1
-
-    print(f'{len(matrix)}/{len(joltages)}:{max(joltages)}', end='')
-    ticks = max(5, len(matrix) - 1)
-    c = floorcost + bar(matrix, joltages)
+    print(f'{len(matrix)}/{len(joltages)}:{max(joltages)}')
+    c = bar(matrix, joltages)
     assert(c < 999999)
-    print()
     print("Part 2:", c)
     total2 += c
 
